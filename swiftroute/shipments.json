@@ -1,0 +1,17 @@
+[
+  {
+    "id": 1,
+    "item_code": "SHP - 45454",
+    "deadline": "2026-04-11",
+    "category": "Express",
+    "added_at": "10-04-2026 21:17:25",
+    "days_remaining": 1
+  },
+  {
+    "id": 2,
+    "item_code": "SHP - 788992",
+    "deadline": "2026-04-10",
+    "category": "Fragile",
+    "added_at": "10-04-2026 21:20:36"
+  }
+]
