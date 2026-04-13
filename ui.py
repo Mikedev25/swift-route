@@ -137,8 +137,8 @@ def make_priority_badge(priority: str) -> QWidget:
  
 # Assets
 BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
-BACKDROP_IMG = os.path.join(BASE_DIR, "backdrop.png")
-EYE_IMG      = os.path.join(BASE_DIR, "eye.png")
+BACKDROP_IMG = os.path.join(BASE_DIR, "assets/backdrop.png")
+EYE_IMG      = os.path.join(BASE_DIR, "assets/eye.png")
  
 ORANGE   = "#f97316"
 ORANGE_H = "#fb923c"   # hover
@@ -366,7 +366,7 @@ class MainWindow(QWidget):
  
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("SwiftRoute — Logistics Platform")
+        self.setWindowTitle("Swift Route Logistics")
         self.setMinimumSize(1140, 580)
         self.resize(1140, 580)
  
