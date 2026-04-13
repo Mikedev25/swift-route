@@ -215,7 +215,7 @@ class NavBar(QWidget):
         layout.setSpacing(12)
  
         # Logo icon (eye.png)
-        eye_pix = QPixmap("eye.png")
+        eye_pix = QPixmap("assets/eye.png")
         logo_icon = QLabel()
         if not eye_pix.isNull():
             logo_icon.setPixmap(
@@ -367,6 +367,7 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Swift Route Logistics")
+        self.setWindowIcon(QIcon("assets/van.png"))
         self.setMinimumSize(1140, 580)
         self.resize(1140, 580)
  
