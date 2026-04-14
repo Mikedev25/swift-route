@@ -3,10 +3,10 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QLabel, QWidget, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QHBoxLayout, QPushButton,
     QMessageBox, QInputDialog, QLineEdit, QHeaderView, QDialog,
-    QFormLayout, QDateEdit, QComboBox, QDialogButtonBox, QGraphicsDropShadowEffect, QSizePolicy, QStackedWidget
+    QFormLayout, QDateEdit, QComboBox, QDialogButtonBox, QGraphicsDropShadowEffect, QSizePolicy, QStackedWidget, QFrame
 )
 from PyQt5.QtGui import (QIcon, QFont, QColor, QPainter, QBrush, QPen,
-    QLinearGradient, QPixmap, QPalette)
+    QLinearGradient, QPixmap, QPalette, QPainter, QPainterPath)
 from PyQt5.QtCore import Qt, QSize, QDate
 from datetime import datetime, date
 from function import *
@@ -14,6 +14,60 @@ import sys
 import json
 import os
 
+# Assets
+BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
+BACKDROP_IMG = os.path.join(BASE_DIR, "assets", "backdrop.png")
+EYE_IMG      = os.path.join(BASE_DIR, "assets", "eye.png")
+SHP_BTN      = os.path.join(BASE_DIR, "assets", "newshipment.png") 
+
+# Palettes:
+ORANGE    = "#f97316"
+ORANGE_H  = "#fb923c"
+BG_MAIN   = "#f3f4f6"
+BG_HEADER = "#111111"
+BG_CARD   = "#ffffff"
+BG_SEARCH = "#2a2a2a"
+PURPLE    = "#6b21a8"
+TEXT_WHITE = "#ffffff"
+TEXT_GRAY  = "#6b7280"
+TEXT_DARK  = "#111827"
+BORDER     = "#e5e7eb"
+
+# Other Helpers
+PRIORITY_CFG = {
+    "Critical": {"bg": "#dc2626", "fg": "#ffffff"},
+    "High":     {"bg": "#f97316", "fg": "#ffffff"},
+    "Medium":   {"bg": "#facc15", "fg": "#713f12"},
+    "Low":      {"bg": "#22c55e", "fg": "#14532d"},
+}
+
+_ACT_BTN = """
+    QPushButton {
+        background-color: #1e293b; color: white;
+        padding: 4px 10px; border-radius: 14px;
+        font-size: 12px; min-width: 64px; min-height: 26px;
+        font-family: 'Segoe UI';
+    }
+    QPushButton:hover   { background-color: #334155; }
+    QPushButton:pressed { background-color: #0f172a; }
+"""
+_DEL_BTN = """
+    QPushButton {
+        background-color: transparent; color: #dc2626;
+        border: 1px solid #dc2626; border-radius: 13px;
+        font-size: 13px; min-width: 26px; min-height: 26px;
+    }
+    QPushButton:hover { background-color: #dc2626; color: white; }
+"""
+
+def _make_badge(text: str, bg: str, fg: str) -> QLabel:
+    lbl = QLabel(text)
+    lbl.setAlignment(Qt.AlignCenter)
+    lbl.setFont(QFont("Segoe UI", 10, QFont.Bold))
+    lbl.setStyleSheet(
+        f"background-color:{bg}; color:{fg}; border-radius:10px; padding:3px 12px;")
+    lbl.setFixedHeight(26)
+    return lbl
 
 # ─────────────────────────────────────────────
 # Dialog
@@ -102,7 +156,7 @@ class ShipmentDialog(QDialog):
             "deadline":  self.date_input.date().toString("yyyy-MM-dd"),
             "category":  self.cat_input.currentText(),
         }
-    
+
 # ─────────────────────────────────────────────
 #  Helper: priority badge widget
 # ─────────────────────────────────────────────
@@ -134,15 +188,6 @@ def make_priority_badge(priority: str) -> QWidget:
 # ─────────────────────────────────────────────
 #  Main Window
 # ─────────────────────────────────────────────
- 
-# Assets
-BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
-BACKDROP_IMG = os.path.join(BASE_DIR, "assets/backdrop.png")
-EYE_IMG      = os.path.join(BASE_DIR, "assets/eye.png")
- 
-ORANGE   = "#f97316"
-ORANGE_H = "#fb923c"   # hover
- 
  
 # Window Background
 class BackdropWidget(QWidget): 
@@ -301,7 +346,7 @@ class ActionButtons(QWidget):
         self.buttons.append(history_btn)
         layout.addWidget(history_btn, alignment=Qt.AlignCenter)
         
-# Main Window
+# Welcome Page
 class WelcomePage(QWidget):
     def __init__(self, on_manage, on_history, parent=None):
         super().__init__(parent)
@@ -387,7 +432,11 @@ class MainWindow(QWidget):
         self.stack.addWidget(self.welcome_page)
  
         # Index 1 — Shipment Manager
-        self.shipment_page = ShipmentManager(self)
+        self.shipment_page = ShipmentDashboard(
+            on_back=self.go_home,
+            on_history=self.go_to_history,
+            parent=self,
+        )
         self.stack.addWidget(self.shipment_page)
  
         # Index 2 — View History
@@ -409,264 +458,444 @@ class MainWindow(QWidget):
 # ─────────────────────────────────────────────
 #  Shipment Manager Panel
 # ─────────────────────────────────────────────
- 
-class ShipmentManager(QWidget):
-    """
-    Main panel for active shipments.
-    Table columns: #Rank | Item Code | Deadline | Days Left | Priority | Category | Options
-    Sorted by nearest deadline using brute-force bubble sort.
-    """
-    COLS = ["Rank", "Item Code", "Deadline", "Days Left", "Priority", "Category", "Options"]
- 
-    def __init__(self, parent=None):
+
+# Dashboard header
+class DashBar(QWidget):
+    def __init__(self, on_new_shipment, title, show_history_btn=False, on_history=None, parent=None):
         super().__init__(parent)
-        self.parent_window = parent
-        self.shipments: list = load_json(SHIPMENTS_FILE, [])
-        self._build_ui()
-        self._refresh_table()
- 
-    def _build_ui(self):
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
- 
-        inner = QWidget()
-        inner.setStyleSheet("""
-            QWidget { background-color: white; border-radius: 25px; margin: 10px; }
+        self.setMinimumHeight(120)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+
+        # Shadow
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(32)
+        shadow.setOffset(0, 8)
+        shadow.setColor(QColor(0, 0, 0, 80))
+        self.setGraphicsEffect(shadow)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(28, 20, 28, 20)
+        layout.setSpacing(16)
+
+        # ── Left: logo + title + date ─────────────────────────────────────
+        left = QVBoxLayout()
+        left.setSpacing(4)
+
+        title_row = QHBoxLayout()
+        title_row.setSpacing(12)
+
+        eye_pix = QPixmap(EYE_IMG)
+        logo = QLabel()
+        if not eye_pix.isNull():
+            logo.setPixmap(
+                eye_pix.scaled(36, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        else:
+            logo.setFixedSize(36, 36)
+            logo.setStyleSheet(f"background:{ORANGE}; border-radius:6px;")
+        title_row.addWidget(logo, alignment=Qt.AlignVCenter)
+
+        title_lbl = QLabel(title)
+        title_lbl.setFont(QFont("Segoe UI", 18, QFont.Bold))
+        title_lbl.setStyleSheet(f"color: {TEXT_WHITE}; background: transparent;")
+        title_row.addWidget(title_lbl, alignment=Qt.AlignVCenter)
+        left.addLayout(title_row)
+
+        today_str = QDate.currentDate().toString("dddd - MMMM d, yyyy")
+        date_lbl = QLabel(today_str)
+        date_lbl.setFont(QFont("Segoe UI", 10))
+        date_lbl.setStyleSheet(f"color: rgba(255,255,255,0.55); background: transparent;")
+        left.addWidget(date_lbl)
+
+        layout.addLayout(left)
+
+        # ── Right: search + button ────────────────────────────────────────
+        right = QHBoxLayout()
+        right.setSpacing(12)
+        right.setAlignment(Qt.AlignVCenter)
+
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search item code")
+        self.search.setFixedHeight(40)
+        self.search.setMinimumWidth(220)
+        self.search.setStyleSheet(f"""
+            QLineEdit {{
+                background-color: {BG_SEARCH};
+                color: {TEXT_WHITE};
+                border: none;
+                border-radius: 20px;
+                padding: 0 16px;
+                font-size: 13px;
+                font-family: 'Segoe UI';
+            }}
+            QLineEdit::placeholder {{ color: rgba(255,255,255,0.4); }}
         """)
-        il = QVBoxLayout(inner)
-        il.setContentsMargins(20, 20, 20, 20)
- 
-        # ── Header
-        hc = QWidget()
-        hl = QHBoxLayout(hc)
-        hl.setContentsMargins(0, 0, 0, 0)
-        logo = QLabel("Swift Route")
-        logo.setFont(QFont("Helvetica", 20))
-        logo.setStyleSheet("color: #800000; font-weight: bold;")
-        logo.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        hl.addWidget(logo)
-        hl.addStretch()
- 
-        # ── Section label
-        slabel = QLabel("Shipment Manager  •  Priority View")
-        slabel.setFont(QFont("Helvetica", 15))
-        slabel.setStyleSheet("""
-            color: white; background-color: #800000;
-            border-radius: 20px; padding: 5px 15px; font-size: 16px;
+        right.addWidget(self.search)
+
+        new_btn = QPushButton("New Shipment")
+        new_btn.setFixedHeight(40)
+        new_btn.setCursor(Qt.PointingHandCursor)
+        new_btn.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {ORANGE};
+                color: white;
+                border: none;
+                border-radius: 20px;
+                font-size: 13px;
+                font-weight: 700;
+                font-family: 'Segoe UI';
+                padding: 0 20px;
+            }}
+            QPushButton:hover   {{ background-color: {ORANGE_H}; }}
+            QPushButton:pressed {{ background-color: #c85c0a; }}
         """)
-        slabel.setAlignment(Qt.AlignCenter)
- 
-        # ── Legend row
-        legend_row = QHBoxLayout()
-        legend_row.setSpacing(10)
-        legend_row.addStretch()
-        for p in PRIORITY_ORDER:
-            badge = QLabel(p)
-            bg = PRIORITY_COLORS[p]
-            fg = PRIORITY_TEXT_COLORS[p]
-            badge.setStyleSheet(f"""
-                background-color:{bg}; color:{fg};
-                border-radius:8px; padding:3px 10px;
-                font-size:11px; font-weight:bold;
+        new_btn.clicked.connect(on_new_shipment)
+        right.addWidget(new_btn)
+
+        if show_history_btn and on_history:
+            hist_btn = QPushButton("View History")
+            hist_btn.setFixedHeight(40)
+            hist_btn.setCursor(Qt.PointingHandCursor)
+            hist_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: rgba(255,255,255,0.12);
+                    color: white;
+                    border: 1px solid rgba(255,255,255,0.3);
+                    border-radius: 20px;
+                    font-size: 13px;
+                    font-family: 'Segoe UI';
+                    padding: 0 16px;
+                }}
+                QPushButton:hover {{ background-color: rgba(255,255,255,0.22); }}
             """)
-            legend_row.addWidget(badge)
-        legend_row.addStretch()
+            hist_btn.clicked.connect(on_history)
+            right.addWidget(hist_btn)
+
+        layout.addStretch()
+        layout.addLayout(right)
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(0, 0, self.width(), self.height(), 20, 20)
+        p.fillPath(path, QColor(BG_HEADER))
+        p.end()
+
+# Dashboard Stat     
+class DashStat(QWidget):
+    def __init__(self, label: str, value, accent: str, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(96)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setStyleSheet(f"""
+            QWidget {{
+                background-color:{BG_CARD}; border-radius:14px;
+                border-left:5px solid {accent};
+            }}
+        """)
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(18)
+        shadow.setOffset(0, 4)
+        shadow.setColor(QColor(0, 0, 0, 30))
+        self.setGraphicsEffect(shadow)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 12, 20, 12)
+        lay.setSpacing(4)
+
+        self._val_lbl = QLabel(str(value))
+        self._val_lbl.setFont(QFont("Segoe UI", 24, QFont.Bold))
+        self._val_lbl.setStyleSheet(
+            f"color:{TEXT_DARK}; background:transparent; border:none;")
+        lay.addWidget(self._val_lbl)
+
+        lbl = QLabel(label)
+        lbl.setFont(QFont("Segoe UI", 11))
+        lbl.setStyleSheet(f"color:{TEXT_GRAY}; background:transparent; border:none;")
+        lay.addWidget(lbl)
+
+    def set_value(self, v):
+        self._val_lbl.setText(str(v))
  
-        # ── Buttons
-        main_btn_style = """
-            QPushButton {
-                background-color: #d9bebe; color: #800000;
-                border-radius: 10px; padding: 10px 30px; font-size: 16px;
-            }
-            QPushButton:hover { background-color: #e9f5f3; }
-        """
-        add_btn = QPushButton("+ Add Shipment")
-        add_btn.setStyleSheet(main_btn_style)
-        add_btn.clicked.connect(self._add_shipment)
- 
-        review_btn = QPushButton("Shipment Review →")
-        review_btn.setStyleSheet(main_btn_style)
-        review_btn.clicked.connect(
-            lambda: self.parent_window.setCentralWidget(ViewHistory(self.parent_window)))
- 
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        btn_row.addWidget(add_btn)
-        btn_row.addSpacing(30)
-        btn_row.addWidget(review_btn)
-        btn_row.addStretch()
- 
-        # ── Table
+class ShipmentTable(QWidget):
+    COLS = ["Priority", "Item Code", "Deadline", "Days Left",
+            "Category", "Options"]
+
+    def __init__(self, shipments: list,
+                 on_deliver, on_return, on_edit, on_delete,
+                 parent=None):
+        super().__init__(parent)
+        self._on_deliver = on_deliver
+        self._on_return  = on_return
+        self._on_edit    = on_edit
+        self._on_delete  = on_delete
+        self.all_shipments = list(shipments)
+
+        self.setStyleSheet(f"background-color:{BG_CARD}; border-radius:16px;")
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(20)
+        shadow.setOffset(0, 4)
+        shadow.setColor(QColor(0, 0, 0, 25))
+        self.setGraphicsEffect(shadow)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(10)
+
+        # Title + legend
+        hdr_row = QHBoxLayout()
+        t_lbl = QLabel(f"Active Shipments: {len(shipments)}")
+        t_lbl.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        t_lbl.setStyleSheet(f"color:{TEXT_DARK}; background:transparent;")
+        hdr_row.addWidget(t_lbl)
+        hdr_row.addStretch()
+        
+        layout.addLayout(hdr_row)
+
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setStyleSheet(f"color:{BORDER};")
+        layout.addWidget(line)
+
         self.table = QTableWidget(0, len(self.COLS))
         self.table.setHorizontalHeaderLabels(self.COLS)
-        self.table.setStyleSheet("""
-            QTableWidget {
-                background-color: #fcecec;
-                border: none; border-radius: 15px; font-size: 14px;
-            }
-            QHeaderView::section {
-                background-color: #800000; color: white;
-                font-weight: bold; padding: 8px 10px;
-                border: none; border-radius: 10px;
-                font-size: 14px; font-family: Helvetica;
-            }
-            QTableWidget::item { padding: 5px; }
+        self.table.setStyleSheet(f"""
+            QTableWidget {{
+                background-color:transparent; border:none;
+                font-size:13px; font-family:'Segoe UI';
+                gridline-color:{BORDER};
+            }}
+            QHeaderView::section {{
+                background-color:{BG_MAIN}; color:{TEXT_GRAY};
+                font-weight:bold; padding:10px 8px; border:none;
+                font-size:12px; font-family:'Segoe UI';
+            }}
+            QTableWidget::item {{
+                padding:6px 8px; border-bottom:1px solid {BORDER};
+                
+            }}
+            QTableWidget::item:selected {{
+                background-color:rgba(249,115,22,0.12); color:{TEXT_DARK};
+            }}
         """)
         self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setFixedHeight(70)
-        self.table.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-        self.table.setMinimumHeight(200)
- 
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.horizontalHeader().setFixedHeight(44)
+        self.table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
         hdr = self.table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # Rank
-        hdr.setSectionResizeMode(1, QHeaderView.Stretch)           # Item Code
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Deadline
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Days Left
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Priority
-        hdr.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Category
-        hdr.setSectionResizeMode(6, QHeaderView.Stretch)           # Options
- 
-        # ── Count label & footer
-        self.count_label = QLabel()
-        self.count_label.setFont(QFont("Helvetica", 10))
-        self.count_label.setStyleSheet("color: black;")
- 
-        back_btn = QPushButton("← Back")
-        back_btn.setFont(QFont("Helvetica"))
-        back_btn.setStyleSheet(main_btn_style)
-        back_btn.clicked.connect(self._go_back)
- 
-        footer = QWidget()
-        fl = QHBoxLayout(footer)
-        fl.setContentsMargins(0, 0, 0, 0)
-        fl.addWidget(self.count_label)
-        fl.addStretch()
-        fl.addWidget(back_btn)
- 
-        il.addWidget(hc)
-        il.addWidget(slabel, alignment=Qt.AlignHCenter)
-        il.addLayout(legend_row)
-        il.addLayout(btn_row)
-        il.addWidget(self.table)
-        il.addWidget(footer)
- 
-        main_layout.addWidget(inner)
- 
-    # ── Table rendering ────────────────────────────────────────────
- 
-    def _refresh_table(self):
-        """Recompute days, bubble-sort, and redraw the whole table."""
-        for s in self.shipments:
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(5, QHeaderView.Stretch)
+
+        layout.addWidget(self.table)
+
+        self.count_lbl = QLabel()
+        self.count_lbl.setFont(QFont("Segoe UI", 10))
+        self.count_lbl.setStyleSheet(
+            f"color:{TEXT_GRAY}; background:transparent;")
+        layout.addWidget(self.count_lbl)
+
+        self.refresh(shipments)
+
+    # table rendering
+
+    def refresh(self, shipments: list):
+        self.all_shipments = list(shipments)
+        for s in self.all_shipments:
             s["days_remaining"] = compute_days_remaining(s["deadline"])
- 
-        sorted_shipments = brute_force_sort(self.shipments)
- 
+        sorted_s = brute_force_sort(self.all_shipments)
         self.table.setRowCount(0)
-        for rank, s in enumerate(sorted_shipments, 1):
-            self._add_table_row(rank, s)
- 
-        self._update_count()
- 
-    def _add_table_row(self, rank: int, s: dict):
+        for s in sorted_s:
+            self._add_row(s)
+
+    def filter(self, query: str):
+        q = query.strip().lower()
+        if not q:
+            self.refresh(self.all_shipments)
+            return
+        filtered = [s for s in self.all_shipments
+                    if q in s["item_code"].lower()
+                    or q in s.get("category", "").lower()]
+        for s in filtered:
+            s["days_remaining"] = compute_days_remaining(s["deadline"])
+        sorted_f = brute_force_sort(filtered)
+        self.table.setRowCount(0)
+        for s in sorted_f:
+            self._add_row(s)
+
+    # table row rendering
+
+    def _add_row(self, s: dict):
         row = self.table.rowCount()
         self.table.insertRow(row)
-        self.table.setRowHeight(row, 70)
- 
+        self.table.setRowHeight(row, 60)
+
         days     = s["days_remaining"]
         priority = get_priority(days)
- 
-        if days < 0:
-            days_str = f"{abs(days)}d overdue"
-        elif days == 0:
-            days_str = "Today"
-        else:
-            days_str = f"{days}d left"
- 
-        def cell(text, color=None):
+        days_str = (f"{abs(days)}d overdue" if days < 0
+                    else "Today" if days == 0
+                    else f"{days}d left")
+
+        def cell(text, align=Qt.AlignCenter):
             item = QTableWidgetItem(str(text))
-            item.setTextAlignment(Qt.AlignCenter)
-            if color:
-                item.setForeground(QColor(color))
+            item.setTextAlignment(align)
             item.setFlags(item.flags() & ~Qt.ItemIsEditable)
             return item
- 
-        self.table.setItem(row, 0, cell(rank))
-        self.table.setItem(row, 1, cell(s["item_code"]))
+
+        priority_item = cell(priority)
+        priority_item.setForeground(
+            QColor(PRIORITY_COLORS.get(priority, TEXT_DARK)))
+        self.table.setItem(row, 0, priority_item)
+        self.table.setItem(row, 1,
+            cell(s["item_code"], Qt.AlignCenter))
         self.table.setItem(row, 2, cell(s["deadline"]))
-        self.table.setItem(row, 3, cell(days_str,
-            PRIORITY_COLORS.get(priority)))
-        self.table.setCellWidget(row, 4, make_priority_badge(priority))
-        self.table.setItem(row, 5, cell(s.get("category", "Standard")))
- 
-        # ── Option buttons
+
+        days_item = cell(days_str)
+        days_item.setForeground(
+            QColor(PRIORITY_COLORS.get(priority, TEXT_DARK)))
+        self.table.setItem(row, 3, days_item)
+
+        self.table.setItem(row, 4, cell(s.get("category", "Standard")))
+
+        # Options cell
         opt = QWidget()
-        opt.setStyleSheet("background-color: #fcecec;")
-        hl = QHBoxLayout(opt)
-        hl.setContentsMargins(0, 0, 0, 0)
-        hl.setSpacing(6)
-        hl.setAlignment(Qt.AlignCenter)
- 
-        btn_s = """
-            QPushButton {
-                background-color: #800000; color: white;
-                padding: 4px 12px; border-radius: 18px;
-                font-size: 13px; min-width: 75px; min-height: 28px;
-            }
-            QPushButton:hover { background-color: #a00000; }
-            QPushButton:pressed { background-color: #600000; }
-        """
- 
+        opt.setStyleSheet("background:transparent;")
+        ol = QHBoxLayout(opt)
+        ol.setContentsMargins(4, 4, 4, 4)
+        ol.setSpacing(6)
+        ol.setAlignment(Qt.AlignCenter)
+
         deliver_btn = QPushButton("Deliver")
-        deliver_btn.setStyleSheet(btn_s)
+        deliver_btn.setStyleSheet(_ACT_BTN)
         deliver_btn.clicked.connect(
-            lambda _, sid=s["id"]: self._confirm_action(sid, "Delivered"))
- 
+            lambda _, sid=s["id"]: self._on_deliver(sid))
+
         return_btn = QPushButton("Return")
-        return_btn.setStyleSheet(btn_s)
+        return_btn.setStyleSheet(_ACT_BTN)
         return_btn.clicked.connect(
-            lambda _, sid=s["id"]: self._confirm_action(sid, "Returned"))
- 
+            lambda _, sid=s["id"]: self._on_return(sid))
+
         edit_btn = QPushButton("Edit")
-        edit_btn.setStyleSheet(btn_s)
+        edit_btn.setStyleSheet(_ACT_BTN)
         edit_btn.clicked.connect(
-            lambda _, sid=s["id"]: self._edit_shipment(sid))
- 
-        trash_btn = QPushButton("✕")
-        trash_btn.setStyleSheet("""
-            QPushButton {
-                background-color: transparent; color: #800000;
-                border: 1px solid #800000; border-radius: 14px;
-                font-size: 14px; min-width: 28px; min-height: 28px;
-            }
-            QPushButton:hover { background-color: #800000; color: white; }
-        """)
-        trash_btn.clicked.connect(
-            lambda _, sid=s["id"]: self._delete_shipment(sid))
- 
-        hl.addWidget(deliver_btn)
-        hl.addWidget(return_btn)
-        hl.addWidget(edit_btn)
-        hl.addWidget(trash_btn)
-        self.table.setCellWidget(row, 6, opt)
- 
-    # CRUD actions 
- 
+            lambda _, sid=s["id"]: self._on_edit(sid))
+
+        del_btn = QPushButton("✕")
+        del_btn.setStyleSheet(_DEL_BTN)
+        del_btn.clicked.connect(
+            lambda _, sid=s["id"]: self._on_delete(sid))
+
+        for b in [deliver_btn, return_btn, edit_btn, del_btn]:
+            ol.addWidget(b)
+        self.table.setCellWidget(row, 5, opt)
+
+# Shipment Dashboard
+class ShipmentDashboard(QWidget):
+    def __init__(self, on_back=None, on_history=None, parent=None):
+        super().__init__(parent)
+        self.on_back    = on_back
+        self.on_history = on_history
+        self.shipments: list = load_json(SHIPMENTS_FILE, [])
+        self.setStyleSheet(f"background-color:{BG_MAIN};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(16)
+
+        self.header = DashBar(
+            title="Your Dashboard",
+            on_new_shipment=self._add_shipment,
+            show_history_btn=True,
+            on_history=self.on_history,
+        )
+        self.header.search.textChanged.connect(self._on_search)
+        root.addWidget(self.header)
+
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(12)
+        self.card_total    = DashStat("Total Shipments", 0, ORANGE)
+        self.card_delivered = DashStat("Delivered",      0, "#22c55e")
+        self.card_pending   = DashStat("Pending",        0, ORANGE)
+        self.card_overdue  = DashStat("Overdue",         0, PURPLE)
+        for c in [self.card_total, self.card_delivered,
+                  self.card_pending, self.card_overdue]:
+            stats_row.addWidget(c)
+        root.addLayout(stats_row)
+
+        self.ship_table = ShipmentTable(
+            shipments=self.shipments,
+            on_deliver=lambda sid: self._confirm_action(sid, "Delivered"),
+            on_return =lambda sid: self._confirm_action(sid, "Returned"),
+            on_edit   =self._edit_shipment,
+            on_delete =self._delete_shipment,
+        )
+        root.addWidget(self.ship_table, stretch=1)
+
+        if on_back:
+            footer = QHBoxLayout()
+            back_btn = QPushButton("Back to Home")
+            back_btn.setFixedHeight(20)
+            back_btn.setCursor(Qt.PointingHandCursor)
+            back_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background:transparent; color:{TEXT_GRAY};
+                    border:1px solid {BORDER}; border-radius:18px;
+                    font-size:12px; font-family:'Segoe UI'; padding:0 18px;
+                }}
+                QPushButton:hover {{ border-color:{ORANGE}; color:{ORANGE}; }}
+            """)
+            back_btn.clicked.connect(on_back)
+            footer.addStretch()
+            footer.addWidget(back_btn)
+            root.addLayout(footer)
+
+        self._refresh()
+
+    def _refresh(self):
+        self.ship_table.refresh(self.shipments)
+        self._update_stats()
+
+    def _update_stats(self):
+        s = self.shipments
+        total    = len(s)
+        pending  = len(s)  # All active shipments are pending
+        overdue  = sum(1 for x in s
+                       if compute_days_remaining(x["deadline"]) < 0)
+        # Count delivered from history
+        history = load_json(HISTORY_FILE, [])
+        delivered = sum(1 for x in history
+                        if x.get("action") == "Delivered")
+        self.card_total.set_value(total)
+        self.card_delivered.set_value(delivered)
+        self.card_pending.set_value(pending)
+        self.card_overdue.set_value(overdue)
+
+    def _on_search(self, text: str):
+        self.ship_table.filter(text)
+
+    # CRUD Actions
+    """ All functionalities here are used in the shipment table."""
+
     def _add_shipment(self):
         dlg = ShipmentDialog(self)
         if dlg.exec_() == QDialog.Accepted:
-            vals = dlg.get_values()
+            vals   = dlg.get_values()
             new_id = max((s["id"] for s in self.shipments), default=0) + 1
             self.shipments.append({
-                "id":       new_id,
+                "id":        new_id,
                 "item_code": vals["item_code"],
                 "deadline":  vals["deadline"],
                 "category":  vals["category"],
                 "added_at":  datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
             })
             save_json(SHIPMENTS_FILE, self.shipments)
-            self._refresh_table()
- 
+            self._refresh()
+
     def _edit_shipment(self, sid: int):
         s = next((x for x in self.shipments if x["id"] == sid), None)
         if not s:
@@ -678,33 +907,35 @@ class ShipmentManager(QWidget):
             s["deadline"]  = vals["deadline"]
             s["category"]  = vals["category"]
             save_json(SHIPMENTS_FILE, self.shipments)
-            self._refresh_table()
- 
+            self._refresh()
+
     def _delete_shipment(self, sid: int):
         s = next((x for x in self.shipments if x["id"] == sid), None)
         if not s:
             return
-        r = QMessageBox.question(self, "Delete",
+        r = QMessageBox.question(
+            self, "Delete Shipment",
             f"Remove shipment '{s['item_code']}'?",
             QMessageBox.Yes | QMessageBox.No)
         if r == QMessageBox.Yes:
             self.shipments = [x for x in self.shipments if x["id"] != sid]
             save_json(SHIPMENTS_FILE, self.shipments)
-            self._refresh_table()
- 
+            self._refresh()
+
     def _confirm_action(self, sid: int, action: str):
         s = next((x for x in self.shipments if x["id"] == sid), None)
         if not s:
             return
-        r = QMessageBox.question(self, "Confirm",
+        r = QMessageBox.question(
+            self, "Confirm",
             f"Mark '{s['item_code']}' as {action}?",
             QMessageBox.Ok | QMessageBox.Cancel)
         if r == QMessageBox.Ok:
             self._move_to_history(s, action)
             self.shipments = [x for x in self.shipments if x["id"] != sid]
             save_json(SHIPMENTS_FILE, self.shipments)
-            self._refresh_table()
- 
+            self._refresh()
+
     def _move_to_history(self, s: dict, action: str):
         history = load_json(HISTORY_FILE, [])
         history.append({
@@ -715,14 +946,6 @@ class ShipmentManager(QWidget):
             "action":    action,
         })
         save_json(HISTORY_FILE, history)
- 
-    def _update_count(self):
-        self.count_label.setText(f"Active Shipments: {len(self.shipments)}")
- 
-    def _go_back(self):
-        if self.parent_window:
-            self.parent_window.stack.setCurrentIndex(self.parent_window.PAGE_HOME)
-
 # ─────────────────────────────────────────────
 #  Shipment Review Panel  (History)
 #  Uses binary search on sorted item codes
@@ -846,7 +1069,7 @@ class ViewHistory(QWidget):
         manage_btn.setStyleSheet("main_btn_style")
         manage_btn.clicked.connect(
             lambda: self.parent_window.setCentralWidget(
-                ShipmentManager(self.parent_window)))
+                ShipmentDashboard(self.parent_window)))
  
         footer = QWidget()
         fl = QHBoxLayout(footer)
