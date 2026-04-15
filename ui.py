@@ -10,15 +10,17 @@ from PyQt5.QtGui import (QIcon, QFont, QColor, QPainter, QBrush, QPen,
 from PyQt5.QtCore import Qt, QSize, QDate
 from datetime import datetime, date
 from function import *
+import re # python regular expression for search functionality
 import sys
-import json
 import os
 
 # Assets
 BASE_DIR     = os.path.dirname(os.path.abspath(__file__))
 BACKDROP_IMG = os.path.join(BASE_DIR, "assets", "backdrop.png")
 EYE_IMG      = os.path.join(BASE_DIR, "assets", "eye.png")
-SHP_BTN      = os.path.join(BASE_DIR, "assets", "newshipment.png") 
+SHP_BTN      = os.path.join(BASE_DIR, "assets", "newshipment.png")
+
+SHIPMENTS_FILE = "shipements.json"
 
 # Palettes:
 ORANGE    = "#f97316"
@@ -32,6 +34,8 @@ TEXT_WHITE = "#ffffff"
 TEXT_GRAY  = "#6b7280"
 TEXT_DARK  = "#111827"
 BORDER     = "#e5e7eb"
+
+SHIPMENTS_FILE = "shipments.json"
 
 # Other Helpers
 PRIORITY_CFG = {
@@ -59,15 +63,6 @@ _DEL_BTN = """
     }
     QPushButton:hover { background-color: #dc2626; color: white; }
 """
-
-def _make_badge(text: str, bg: str, fg: str) -> QLabel:
-    lbl = QLabel(text)
-    lbl.setAlignment(Qt.AlignCenter)
-    lbl.setFont(QFont("Segoe UI", 10, QFont.Bold))
-    lbl.setStyleSheet(
-        f"background-color:{bg}; color:{fg}; border-radius:10px; padding:3px 12px;")
-    lbl.setFixedHeight(26)
-    return lbl
 
 # ─────────────────────────────────────────────
 # Dialog
@@ -440,7 +435,11 @@ class MainWindow(QWidget):
         self.stack.addWidget(self.shipment_page)
  
         # Index 2 — View History
-        self.history_page = ViewHistory(self)
+        self.history_page = ViewHistory(
+            on_back=self.go_home,
+            on_manage=self.go_to_shipments,
+            parent=self,
+        )
         self.stack.addWidget(self.history_page)
  
         self.stack.setCurrentIndex(self.PAGE_HOME)
@@ -461,12 +460,12 @@ class MainWindow(QWidget):
 
 # Dashboard header
 class DashBar(QWidget):
-    def __init__(self, on_new_shipment, title, show_history_btn=False, on_history=None, parent=None):
+    def __init__(self, title: str, on_new_shipment = None,
+                 show_history_btn=False, on_history=None, parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(120)
+        self.setMinimumHeight(110)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-        # Shadow
         shadow = QGraphicsDropShadowEffect(self)
         shadow.setBlurRadius(32)
         shadow.setOffset(0, 8)
@@ -474,13 +473,12 @@ class DashBar(QWidget):
         self.setGraphicsEffect(shadow)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(28, 20, 28, 20)
+        layout.setContentsMargins(28, 18, 28, 18)
         layout.setSpacing(16)
 
-        # ── Left: logo + title + date ─────────────────────────────────────
+        # Left — logo + title + date
         left = QVBoxLayout()
         left.setSpacing(4)
-
         title_row = QHBoxLayout()
         title_row.setSpacing(12)
 
@@ -488,68 +486,43 @@ class DashBar(QWidget):
         logo = QLabel()
         if not eye_pix.isNull():
             logo.setPixmap(
-                eye_pix.scaled(36, 36, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                eye_pix.scaled(36, 36, Qt.KeepAspectRatio,
+                               Qt.SmoothTransformation))
         else:
             logo.setFixedSize(36, 36)
             logo.setStyleSheet(f"background:{ORANGE}; border-radius:6px;")
         title_row.addWidget(logo, alignment=Qt.AlignVCenter)
 
-        title_lbl = QLabel(title)
-        title_lbl.setFont(QFont("Segoe UI", 18, QFont.Bold))
-        title_lbl.setStyleSheet(f"color: {TEXT_WHITE}; background: transparent;")
-        title_row.addWidget(title_lbl, alignment=Qt.AlignVCenter)
+        lbl = QLabel(title)
+        lbl.setFont(QFont("Segoe UI", 18, QFont.Bold))
+        lbl.setStyleSheet(f"color:{TEXT_WHITE}; background:transparent;")
+        title_row.addWidget(lbl, alignment=Qt.AlignVCenter)
         left.addLayout(title_row)
 
-        today_str = QDate.currentDate().toString("dddd - MMMM d, yyyy")
-        date_lbl = QLabel(today_str)
+        date_lbl = QLabel(QDate.currentDate().toString("dddd - MMMM d, yyyy"))
         date_lbl.setFont(QFont("Segoe UI", 10))
-        date_lbl.setStyleSheet(f"color: rgba(255,255,255,0.55); background: transparent;")
+        date_lbl.setStyleSheet("color:rgba(255,255,255,0.55); background:transparent;")
         left.addWidget(date_lbl)
 
         layout.addLayout(left)
 
-        # ── Right: search + button ────────────────────────────────────────
+        # Right — search + action buttons
         right = QHBoxLayout()
-        right.setSpacing(12)
+        right.setSpacing(10)
         right.setAlignment(Qt.AlignVCenter)
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search item code")
+        self.search.setPlaceholderText("Search item code…")
         self.search.setFixedHeight(40)
-        self.search.setMinimumWidth(220)
+        self.search.setMinimumWidth(200)
         self.search.setStyleSheet(f"""
             QLineEdit {{
-                background-color: {BG_SEARCH};
-                color: {TEXT_WHITE};
-                border: none;
-                border-radius: 20px;
-                padding: 0 16px;
-                font-size: 13px;
-                font-family: 'Segoe UI';
+                background-color:{BG_SEARCH}; color:{TEXT_WHITE};
+                border:none; border-radius:20px;
+                padding:0 16px; font-size:13px; font-family:'Segoe UI';
             }}
-            QLineEdit::placeholder {{ color: rgba(255,255,255,0.4); }}
         """)
         right.addWidget(self.search)
-
-        new_btn = QPushButton("New Shipment")
-        new_btn.setFixedHeight(40)
-        new_btn.setCursor(Qt.PointingHandCursor)
-        new_btn.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {ORANGE};
-                color: white;
-                border: none;
-                border-radius: 20px;
-                font-size: 13px;
-                font-weight: 700;
-                font-family: 'Segoe UI';
-                padding: 0 20px;
-            }}
-            QPushButton:hover   {{ background-color: {ORANGE_H}; }}
-            QPushButton:pressed {{ background-color: #c85c0a; }}
-        """)
-        new_btn.clicked.connect(on_new_shipment)
-        right.addWidget(new_btn)
 
         if show_history_btn and on_history:
             hist_btn = QPushButton("View History")
@@ -557,18 +530,30 @@ class DashBar(QWidget):
             hist_btn.setCursor(Qt.PointingHandCursor)
             hist_btn.setStyleSheet(f"""
                 QPushButton {{
-                    background-color: rgba(255,255,255,0.12);
-                    color: white;
-                    border: 1px solid rgba(255,255,255,0.3);
-                    border-radius: 20px;
-                    font-size: 13px;
-                    font-family: 'Segoe UI';
-                    padding: 0 16px;
+                    background-color:rgba(255,255,255,0.12); color:white;
+                    border:1px solid rgba(255,255,255,0.3); border-radius:20px;
+                    font-size:13px; font-family:'Segoe UI'; padding:0 16px;
                 }}
-                QPushButton:hover {{ background-color: rgba(255,255,255,0.22); }}
+                QPushButton:hover {{ background-color:rgba(255,255,255,0.22); }}
             """)
             hist_btn.clicked.connect(on_history)
             right.addWidget(hist_btn)
+
+        if on_new_shipment:
+            new_btn = QPushButton("New Shipment")
+            new_btn.setFixedHeight(40)
+            new_btn.setCursor(Qt.PointingHandCursor)
+            new_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color:{ORANGE}; color:white; border:none;
+                    border-radius:20px; font-size:13px; font-weight:700;
+                    font-family:'Segoe UI'; padding:0 20px;
+                }}
+                QPushButton:hover   {{ background-color:{ORANGE_H}; }}
+                QPushButton:pressed {{ background-color:#c85c0a; }}
+            """)
+            new_btn.clicked.connect(on_new_shipment)
+            right.addWidget(new_btn)
 
         layout.addStretch()
         layout.addLayout(right)
@@ -580,6 +565,9 @@ class DashBar(QWidget):
         path.addRoundedRect(0, 0, self.width(), self.height(), 20, 20)
         p.fillPath(path, QColor(BG_HEADER))
         p.end()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
 
 # Dashboard Stat     
 class DashStat(QWidget):
@@ -839,7 +827,7 @@ class ShipmentDashboard(QWidget):
         if on_back:
             footer = QHBoxLayout()
             back_btn = QPushButton("Back to Home")
-            back_btn.setFixedHeight(20)
+            back_btn.setFixedHeight(36)
             back_btn.setCursor(Qt.PointingHandCursor)
             back_btn.setStyleSheet(f"""
                 QPushButton {{
@@ -855,6 +843,8 @@ class ShipmentDashboard(QWidget):
             root.addLayout(footer)
 
         self._refresh()
+    
+    # Dashboard logic
 
     def _refresh(self):
         self.ship_table.refresh(self.shipments)
@@ -914,9 +904,9 @@ class ShipmentDashboard(QWidget):
         if not s:
             return
         r = QMessageBox.question(
-            self, "Delete Shipment",
-            f"Remove shipment '{s['item_code']}'?",
-            QMessageBox.Yes | QMessageBox.No)
+        self, "Delete Shipment",
+        f"Remove shipment '{s['item_code']}'?",
+        QMessageBox.Yes | QMessageBox.No)
         if r == QMessageBox.Yes:
             self.shipments = [x for x in self.shipments if x["id"] != sid]
             save_json(SHIPMENTS_FILE, self.shipments)
@@ -946,222 +936,210 @@ class ShipmentDashboard(QWidget):
             "action":    action,
         })
         save_json(HISTORY_FILE, history)
+
 # ─────────────────────────────────────────────
 #  Shipment Review Panel  (History)
-#  Uses binary search on sorted item codes
 # ─────────────────────────────────────────────
- 
+""" This panel showcase data retrieval and display from the history log
+    using the binary search. We imported **re** or regular expressions to
+    implement a more flexible search funcitonality. """
 class ViewHistory(QWidget):
-    """
-    History panel.
-    Search uses binary search (O log n) on item codes sorted alphabetically.
-    Falls back to linear scan for status/action column.
-    """
-    main_btn_style = """
-                QPushButton {
-                    background-color: #800000; color: white;
-                    padding: 4px 12px; border-radius: 18px;
-                    font-size: 13px; min-width: 75px; min-height: 28px;
-                }
-                QPushButton:hover { background-color: #a00000; }
-                QPushButton:pressed { background-color: #600000; }
-            """
+    COLS = ["Item Code", "Deadline", "Category", "Date & Time", "Status"]
 
-    def __init__(self, parent=None):
+    def __init__(self, on_back=None, on_manage=None, parent=None):
         super().__init__(parent)
-        self.parent_window = parent
-        self._history: list = []          # raw history
-        self._sorted_history: list = []   # sorted by item_code for binary search
-        self._build_ui()
-        self._load_history()
- 
-    def _build_ui(self):
-        main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(0, 0, 0, 0)
- 
-        inner = QWidget()
-        inner.setStyleSheet("""
-            QWidget { background-color: white; border-radius: 25px; margin: 10px; }
+        self._history:        list = []
+        self._sorted_history: list = []
+        self.setStyleSheet(f"background-color:{BG_MAIN};")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(16)
+
+        self.header = DashBar(title="Shipment History")
+        self.header.search.setPlaceholderText(
+            "Search by item code or status (Delivered / Returned)…")
+        self.header.search.textChanged.connect(self._search)
+        root.addWidget(self.header)
+
+        self.search_info = QLabel("Items will appear in the history log below. Use the search box to filter by item code or status.")
+        self.search_info.setFont(QFont("Segoe UI", 10))
+        self.search_info.setStyleSheet(
+            f"color:{TEXT_GRAY}; background:transparent;")
+        root.addWidget(self.search_info)
+
+        # Table card
+        table_card = QWidget()
+        table_card.setStyleSheet(
+            f"background-color:{BG_CARD}; border-radius:16px;")
+        tc_shadow = QGraphicsDropShadowEffect(table_card)
+        tc_shadow.setBlurRadius(20)
+        tc_shadow.setOffset(0, 4)
+        tc_shadow.setColor(QColor(0, 0, 0, 25))
+        table_card.setGraphicsEffect(tc_shadow)
+
+        tc_lay = QVBoxLayout(table_card)
+        tc_lay.setContentsMargins(20, 16, 20, 16)
+        tc_lay.setSpacing(10)
+
+        hdr_row = QHBoxLayout()
+        t_lbl = QLabel("History Log")
+        t_lbl.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        t_lbl.setStyleSheet(f"color:{TEXT_DARK}; background:transparent;")
+        hdr_row.addWidget(t_lbl)
+        hdr_row.addStretch()
+        tc_lay.addLayout(hdr_row)
+
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setStyleSheet(f"color:{BORDER};")
+        tc_lay.addWidget(line)
+
+        self.table = QTableWidget(0, len(self.COLS))
+        self.table.setHorizontalHeaderLabels(self.COLS)
+        self.table.setStyleSheet(f"""
+            QTableWidget {{
+                background-color:transparent; border:none;
+                font-size:13px; font-family:'Segoe UI';
+                gridline-color:{BORDER};
+            }}
+            QHeaderView::section {{
+                background-color:{BG_MAIN}; color:{TEXT_GRAY};
+                font-weight:bold; padding:10px 8px; border:none;
+                font-size:12px; font-family:'Segoe UI';
+            }}
+            QTableWidget::item {{
+                padding:6px 8px; border-bottom:1px solid {BORDER};
+            }}
+            QTableWidget::item:selected {{
+                background-color:rgba(249,115,22,0.12); color:{TEXT_DARK};
+            }}
         """)
-        il = QVBoxLayout(inner)
-        il.setContentsMargins(20, 20, 20, 20)
- 
-        # ── Header
-        hc = QWidget()
-        hl = QHBoxLayout(hc)
-        hl.setContentsMargins(0, 0, 0, 0)
-        logo = QLabel("Switft Route")
-        logo.setFont(QFont("Helvetica", 20))
-        logo.setStyleSheet("color: #800000; font-weight: bold;")
-        logo.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        hl.addWidget(logo)
-        hl.addStretch()
- 
-        slabel = QLabel("History")
-        slabel.setFont(QFont("Helvetica", 15))
-        slabel.setStyleSheet("""
-            color: white; background-color: #800000;
-            border-radius: 20px; padding: 10px 25px; font-size: 16px;
-        """)
-        slabel.setAlignment(Qt.AlignCenter)
- 
-        # ── Search bar + info label
-        search_row = QHBoxLayout()
-        self.search_bar = QLineEdit()
-        self.search_bar.setPlaceholderText("Search by Item Code (binary search) or Status")
-        self.search_bar.setStyleSheet("""
-            QLineEdit {
-                padding: 12px; border-radius: 20px;
-                border: 1px solid #d9bebe; background-color: white;
-                font-size: 14px; margin-bottom: 10px;
-            }
-        """)
-        self.search_bar.setFixedWidth(380)
-        self.search_bar.setMinimumHeight(36)
-        self.search_bar.textChanged.connect(self._search)
- 
-        self.search_info = QLabel("🔍 Binary search active on item codes")
-        self.search_info.setStyleSheet("color: #888; font-size: 11px; padding-left: 8px;")
- 
-        search_row.addWidget(self.search_bar)
-        search_row.addWidget(self.search_info)
-        search_row.addStretch()
- 
-        # ── Table
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(
-            ["Item Code", "Deadline", "Category", "Date & Time", "Status"])
-        self.table.setStyleSheet("""
-            QTableWidget {
-                background-color: #fcecec; border: none;
-                border-radius: 15px; font-size: 14px;
-            }
-            QHeaderView::section {
-                background-color: #fcecec; color: black;
-                font-weight: bold; padding: 8px 10px; border: none;
-                font-size: 14px; font-family: Helvetica;
-            }
-            QTableWidget::item { padding: 5px; }
-        """)
-        self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setFixedHeight(70)
-        self.table.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
-        self.table.setMinimumHeight(200)
- 
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.horizontalHeader().setFixedHeight(44)
+        self.table.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.Stretch)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         hdr.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         hdr.setSectionResizeMode(3, QHeaderView.Stretch)
         hdr.setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        
-        
-        # ── Footer
-        back_btn = QPushButton("← Back")
-        back_btn.setFont(QFont("Helvetica"))
-        back_btn.setStyleSheet("main_btn_style")
-        back_btn.clicked.connect(self._go_back)
- 
-        manage_btn = QPushButton("Manage Shipments")
-        manage_btn.setFont(QFont("Helvetica"))
-        manage_btn.setStyleSheet("main_btn_style")
-        manage_btn.clicked.connect(
-            lambda: self.parent_window.setCentralWidget(
-                ShipmentDashboard(self.parent_window)))
- 
-        footer = QWidget()
-        fl = QHBoxLayout(footer)
-        fl.setContentsMargins(0, 0, 0, 0)
-        fl.addWidget(manage_btn)
-        fl.addStretch()
-        fl.addWidget(back_btn)
-        fl.addStretch()
-       
-        fl.addSpacing(10)
-    
- 
-        il.addWidget(hc)
-        il.addWidget(slabel)
-        il.addLayout(search_row)
-        il.addWidget(self.table)
-        il.addWidget(footer, alignment=Qt.AlignRight)
- 
-        main_layout.addWidget(inner)
- 
-    # ── Data ──────────────────────────────────────────────────────
- 
+        tc_lay.addWidget(self.table)
+
+        root.addWidget(table_card, stretch=1)
+
+        # Footer
+        footer = QHBoxLayout()
+        if on_manage:
+            mgr_btn = QPushButton("Manage Shipments")
+            mgr_btn.setFixedHeight(36)
+            mgr_btn.setCursor(Qt.PointingHandCursor)
+            mgr_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color:{ORANGE}; color:white; border:none;
+                    border-radius:18px; font-size:12px;
+                    font-family:'Segoe UI'; padding:0 18px;
+                }}
+                QPushButton:hover {{ background-color:{ORANGE_H}; }}
+            """)
+            mgr_btn.clicked.connect(on_manage)
+            footer.addWidget(mgr_btn)
+        footer.addStretch()
+
+        if on_back:
+            back_btn = QPushButton("Back to Home")
+            back_btn.setFixedHeight(36)
+            back_btn.setCursor(Qt.PointingHandCursor)
+            back_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background:transparent; color:{TEXT_GRAY};
+                    border:1px solid {BORDER}; border-radius:18px;
+                    font-size:12px; font-family:'Segoe UI'; padding:0 18px;
+                }}
+                QPushButton:hover {{ border-color:{ORANGE}; color:{ORANGE}; }}
+            """)
+            back_btn.clicked.connect(on_back)
+            footer.addWidget(back_btn)
+        root.addLayout(footer)
+
+        self._load_history()
+
     def _load_history(self):
         self._history = load_json(HISTORY_FILE, [])
-        # Sort a copy by item_code for binary search
         self._sorted_history = sorted(
             self._history, key=lambda x: x["item_code"].lower())
-        self._populate_table(self._history)
- 
-    def _populate_table(self, records: list):
+        self._populate(self._history)
+
+    def reload(self):
+        self._load_history()
+
+    def _populate(self, records: list):
         self.table.setRowCount(0)
         for entry in records:
             self._add_row(entry)
- 
+
     def _add_row(self, entry: dict):
         row = self.table.rowCount()
         self.table.insertRow(row)
-        self.table.setRowHeight(row, 60)
- 
-        def cell(text):
+        self.table.setRowHeight(row, 52)
+
+        def cell(text, align=Qt.AlignCenter):
             item = QTableWidgetItem(str(text))
-            item.setTextAlignment(Qt.AlignCenter)
+            item.setTextAlignment(align)
             item.setFlags(item.flags() & ~Qt.ItemIsEditable)
             return item
- 
-        self.table.setItem(row, 0, cell(entry.get("item_code", "")))
+
+        self.table.setItem(
+            row, 0, cell(entry.get("item_code", ""),
+                         Qt.AlignLeft | Qt.AlignVCenter))
         self.table.setItem(row, 1, cell(entry.get("deadline", "—")))
         self.table.setItem(row, 2, cell(entry.get("category", "—")))
         self.table.setItem(row, 3, cell(entry.get("date_time", "")))
- 
+
         action = entry.get("action", "")
         status_item = cell(action)
         if action == "Delivered":
-            status_item.setForeground(QColor("#27ae60"))
+            status_item.setForeground(QColor("#22c55e"))
         elif action == "Returned":
-            status_item.setForeground(QColor("#c0392b"))
+            status_item.setForeground(QColor("#dc2626"))
         self.table.setItem(row, 4, status_item)
- 
-    # ── Search ────────────────────────────────────────────────────
- 
+
     def _search(self, text: str):
-        """
-        Search strategy:
-          - If text looks like an item code (no spaces): binary search O(log n)
-          - If text matches a status keyword: linear scan on action field O(n)
-          - Empty: show all
-        """
         text = text.strip()
         if not text:
-            self._populate_table(self._history)
-            self.search_info.setText("🔍 Binary search active on item codes")
+            self._populate(self._history)
+            self.search_info.setText(
+            "Items will appear in the history log below. Use the search box to filter by item code or status.")
             return
- 
+
         status_keywords = {"delivered", "returned"}
+
         if text.lower() in status_keywords:
-            # linear scan on action
             results = [e for e in self._history
                        if e.get("action", "").lower() == text.lower()]
-            self.search_info.setText(f"⟳ Linear scan on Status — {len(results)} result(s)")
+            self.search_info.setText(f"{len(results)} result(s) found.")
         else:
-            # binary search on item_code
+            # First try binary search (full match)
             results = binary_search_history(self._sorted_history, text)
+
             if not results:
-                # fallback: partial linear scan
-                results = [e for e in self._history
-                           if text.lower() in e.get("item_code", "").lower()]
-                self.search_info.setText(f"⟳ Fallback linear scan — {len(results)} result(s)")
+                # Fallback: numeric-only search
+                results = [
+                    e for e in self._history
+                    if text in re.sub(r"\D", "", e.get("item_code", ""))
+                ]
+
+                if results:
+                    self.search_info.setText(f"{len(results)} result(s) found.")
+                else:
+                    self.search_info.setText("No item code match found.")
             else:
-                self.search_info.setText(
-                    f"✓ Binary search — {len(results)} result(s) found")
- 
-        self._populate_table(results)
+                self.search_info.setText(f"{len(results)} result(s) found.")
+
+        self._populate(results)
  
     def _go_back(self):
         if self.parent_window:

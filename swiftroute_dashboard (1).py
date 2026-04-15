@@ -12,7 +12,8 @@ Requires:
   assets/eye.png
   assets/backdrop.png
 """
-
+from email.mime import text
+import re
 import sys
 import os
 from datetime import datetime, date
@@ -228,7 +229,8 @@ class HeaderCard(QWidget):
         date_lbl.setFont(QFont("Segoe UI", 10))
         date_lbl.setStyleSheet("color:rgba(255,255,255,0.55); background:transparent;")
         left.addWidget(date_lbl)
-        layout.addLayout(left, stretch=1)
+
+        layout.addLayout(left)
 
         # Right — search + action buttons
         right = QHBoxLayout()
@@ -278,7 +280,8 @@ class HeaderCard(QWidget):
             """)
             new_btn.clicked.connect(on_new_shipment)
             right.addWidget(new_btn)
-
+            
+        layout.addStretch()
         layout.addLayout(right)
 
         self.corner_badge = QLabel("HI  LOW")
@@ -851,25 +854,33 @@ class ViewHistory(QWidget):
         if not text:
             self._populate(self._history)
             self.search_info.setText(
-                "🔍 Binary search active on item codes")
+            "Items will appear in the history log below. Use the search box to filter by item code or status.")
             return
 
         status_keywords = {"delivered", "returned"}
+
         if text.lower() in status_keywords:
             results = [e for e in self._history
                        if e.get("action", "").lower() == text.lower()]
-            self.search_info.setText(
-                f"⟳ Linear scan on Status — {len(results)} result(s)")
+            self.search_info.setText(f"{len(results)} result(s) found.")
         else:
+        # First try binary search (full match)
             results = binary_search_history(self._sorted_history, text)
+
             if not results:
-                results = [e for e in self._history
-                           if text.lower() in e.get("item_code", "").lower()]
-                self.search_info.setText(
-                    f"⟳ Fallback linear scan — {len(results)} result(s)")
+                # Fallback: numeric-only search
+                results = [
+                    e for e in self._history
+                    if text in re.sub(r"\D", "", e.get("item_code", ""))
+                ]
+
+                if results:
+                    self.search_info.setText(f"{len(results)} result(s) found.")
+                else:
+                    self.search_info.setText("No item code match found.")
             else:
-                self.search_info.setText(
-                    f"✓ Binary search — {len(results)} result(s) found")
+                self.search_info.setText(f"{len(results)} result(s) found.")
+
         self._populate(results)
 
 

@@ -4,6 +4,7 @@ Task Listing System with Brute-Force Deadline Prioritization
 Uses a brute-force O(n^2) bubble sort to rank tasks by nearest deadline.
 All tasks are entered by the user — no pre-loaded data.
 """
+from PyQt5.QtWidgets import QDialog, QMessageBox
 
 import json
 import os
@@ -112,4 +113,6 @@ def load_json(path: str, default):
 def save_json(path: str, data) -> None:
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
+
+
 
