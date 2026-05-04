@@ -1,14 +1,14 @@
 from PyQt5 import QtWidgets
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QLabel, QWidget, QTableWidget,
+    QLabel, QWidget, QTableWidget,
     QTableWidgetItem, QVBoxLayout, QHBoxLayout, QPushButton,
-    QMessageBox, QInputDialog, QLineEdit, QHeaderView, QDialog,
+    QMessageBox, QLineEdit, QHeaderView, QDialog,
     QFormLayout, QDateEdit, QComboBox, QDialogButtonBox, QGraphicsDropShadowEffect, QSizePolicy, QStackedWidget, QFrame
 )
-from PyQt5.QtGui import (QIcon, QFont, QColor, QPainter, QBrush, QPen,
-    QLinearGradient, QPixmap, QPalette, QPainter, QPainterPath)
-from PyQt5.QtCore import Qt, QSize, QDate
-from datetime import datetime, date
+from PyQt5.QtGui import (QIcon, QFont, QColor, QPainter, QBrush,
+    QLinearGradient, QPixmap, QPainter, QPainterPath)
+from PyQt5.QtCore import Qt, QDate, QObject, pyqtSignal
+from datetime import datetime
 from function import *
 import re # python regular expression for search functionality
 import sys
@@ -403,6 +403,8 @@ class MainWindow(QWidget):
     PAGE_HOME      = 0
     PAGE_SHIPMENTS = 1
     PAGE_HISTORY   = 2
+    
+
  
     def __init__(self):
         super().__init__()
@@ -441,6 +443,9 @@ class MainWindow(QWidget):
             parent=self,
         )
         self.stack.addWidget(self.history_page)
+        
+        # Connect history_updated signal to reload history
+        self.shipment_page.history_updated.connect(self.history_page.reload)
  
         self.stack.setCurrentIndex(self.PAGE_HOME)
  
@@ -452,6 +457,7 @@ class MainWindow(QWidget):
         self.stack.setCurrentIndex(self.PAGE_SHIPMENTS)
  
     def go_to_history(self):
+        self.history_page.reload()
         self.stack.setCurrentIndex(self.PAGE_HISTORY)
 
 # ─────────────────────────────────────────────
@@ -632,10 +638,10 @@ class ShipmentTable(QWidget):
 
         # Title + legend
         hdr_row = QHBoxLayout()
-        t_lbl = QLabel(f"Active Shipments: {len(shipments)}")
-        t_lbl.setFont(QFont("Segoe UI", 14, QFont.Bold))
-        t_lbl.setStyleSheet(f"color:{TEXT_DARK}; background:transparent;")
-        hdr_row.addWidget(t_lbl)
+        self.title_label = QLabel()
+        self.title_label.setFont(QFont("Segoe UI", 14, QFont.Bold))
+        self.title_label.setStyleSheet(f"color:{TEXT_DARK}; background:transparent;")
+        hdr_row.addWidget(self.title_label)
         hdr_row.addStretch()
         
         layout.addLayout(hdr_row)
@@ -694,10 +700,15 @@ class ShipmentTable(QWidget):
 
     def refresh(self, shipments: list):
         self.all_shipments = list(shipments)
+
+        self.title_label.setText(f"Active Shipments: {len(shipments)}")
+
         for s in self.all_shipments:
             s["days_remaining"] = compute_days_remaining(s["deadline"])
+
         sorted_s = brute_force_sort(self.all_shipments)
         self.table.setRowCount(0)
+
         for s in sorted_s:
             self._add_row(s)
 
@@ -784,6 +795,9 @@ class ShipmentTable(QWidget):
 
 # Shipment Dashboard
 class ShipmentDashboard(QWidget):
+    # Signal to notify when history is updated
+    history_updated = pyqtSignal()
+
     def __init__(self, on_back=None, on_history=None, parent=None):
         super().__init__(parent)
         self.on_back    = on_back
@@ -808,10 +822,10 @@ class ShipmentDashboard(QWidget):
         stats_row.setSpacing(12)
         self.card_total    = DashStat("Total Shipments", 0, ORANGE)
         self.card_delivered = DashStat("Delivered",      0, "#22c55e")
-        self.card_pending   = DashStat("Pending",        0, ORANGE)
+        self.card_returned   = DashStat("Returned",        0, ORANGE)
         self.card_overdue  = DashStat("Overdue",         0, PURPLE)
         for c in [self.card_total, self.card_delivered,
-                  self.card_pending, self.card_overdue]:
+                  self.card_returned, self.card_overdue]:
             stats_row.addWidget(c)
         root.addLayout(stats_row)
 
@@ -853,16 +867,17 @@ class ShipmentDashboard(QWidget):
     def _update_stats(self):
         s = self.shipments
         total    = len(s)
-        pending  = len(s)  # All active shipments are pending
         overdue  = sum(1 for x in s
                        if compute_days_remaining(x["deadline"]) < 0)
         # Count delivered from history
         history = load_json(HISTORY_FILE, [])
         delivered = sum(1 for x in history
                         if x.get("action") == "Delivered")
+        returned = sum(1 for x in history
+                       if x.get("action") == "Returned")
         self.card_total.set_value(total)
         self.card_delivered.set_value(delivered)
-        self.card_pending.set_value(pending)
+        self.card_returned.set_value(returned)
         self.card_overdue.set_value(overdue)
 
     def _on_search(self, text: str):
@@ -925,6 +940,8 @@ class ShipmentDashboard(QWidget):
             self.shipments = [x for x in self.shipments if x["id"] != sid]
             save_json(SHIPMENTS_FILE, self.shipments)
             self._refresh()
+            # Emit signal to notify MainWindow that history was updated
+            self.history_updated.emit()
 
     def _move_to_history(self, s: dict, action: str):
         history = load_json(HISTORY_FILE, [])
@@ -1069,6 +1086,12 @@ class ViewHistory(QWidget):
 
     def _load_history(self):
         self._history = load_json(HISTORY_FILE, [])
+        # Sort by date_time in descending order (latest first)
+        self._history = sorted(
+            self._history, 
+            key=lambda x: datetime.strptime(x.get("date_time", "01-01-2000 00:00:00"), "%d-%m-%Y %H:%M:%S"),
+            reverse=True
+        )
         self._sorted_history = sorted(
             self._history, key=lambda x: x["item_code"].lower())
         self._populate(self._history)
@@ -1097,7 +1120,7 @@ class ViewHistory(QWidget):
                          Qt.AlignLeft | Qt.AlignVCenter))
         self.table.setItem(row, 1, cell(entry.get("deadline", "—")))
         self.table.setItem(row, 2, cell(entry.get("category", "—")))
-        self.table.setItem(row, 3, cell(entry.get("date_time", "")))
+        self.table.setItem(row, 3, cell(entry.get("date_time", ""), Qt.AlignLeft | Qt.AlignVCenter))
 
         action = entry.get("action", "")
         status_item = cell(action)
